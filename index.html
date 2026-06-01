@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transcriptor Ultra - Modo Segmentado</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.1); }
+        .loader {
+            border: 3px solid rgba(255,255,255,0.1);
+            border-top: 3px solid #3b82f6;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .gradient-text { background: linear-gradient(90deg, #60a5fa, #a855f7); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    </style>
+</head>
+<body class="min-h-screen py-12 px-4">
+    <div class="max-w-4xl mx-auto">
+        <header class="text-center mb-12">
+            <h1 class="text-5xl font-black mb-3 tracking-tight gradient-text">Transcriptor Segmentado</h1>
+            <p class="text-slate-400 text-lg">Procesamiento por fragmentos para archivos de hasta 100MB.</p>
+        </header>
+
+        <div class="glass rounded-3xl shadow-2xl p-8">
+            <div id="uploadContainer" class="space-y-6">
+                <div id="dropzone" class="border-2 border-dashed border-slate-700 rounded-2xl p-12 text-center transition-all hover:border-blue-500 hover:bg-blue-900/20 cursor-pointer group">
+                    <input type="file" id="audioInput" accept="audio/*" class="hidden">
+                    <div id="file-info" class="space-y-4 text-slate-300">
+                        <svg class="mx-auto w-16 h-16 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z"></path></svg>
+                        <p class="text-xl font-bold text-white">Cargar Podcast Pesado</p>
+                        <p class="text-sm opacity-60">El archivo será dividido en partes pequeñas para evitar bloqueos.</p>
+                    </div>
+                </div>
+
+                <button id="transcribeBtn" disabled class="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 disabled:text-slate-500 text-white font-bold py-5 rounded-2xl shadow-lg transition-all flex justify-center items-center gap-4 text-xl">
+                    <span id="btnText">Iniciar Transcripción por Bloques</span>
+                    <div id="btnLoader" class="loader hidden"></div>
+                </button>
+
+                <div id="progressSection" class="hidden space-y-4 bg-slate-800/50 p-6 rounded-2xl border border-white/5">
+                    <div class="flex justify-between items-end">
+                        <div class="space-y-1">
+                            <p id="progressLabel" class="text-sm font-bold text-blue-400 uppercase">Analizando...</p>
+                            <p id="progressSubLabel" class="text-xs text-slate-500 text-amber-400">No cierres esta pestaña durante el proceso.</p>
+                        </div>
+                        <span id="progressPercent" class="text-2xl font-black text-blue-400">0%</span>
+                    </div>
+                    <div class="w-full bg-slate-700 rounded-full h-3 overflow-hidden">
+                        <div id="progressBar" class="bg-blue-500 h-full transition-all duration-300" style="width: 0%"></div>
+                    </div>
+                </div>
+
+                <div id="status" class="hidden p-5 rounded-xl text-sm font-bold text-center"></div>
+            </div>
+
+            <div id="resultArea" class="hidden mt-8 space-y-4">
+                <div class="flex items-center justify-between border-b border-white/10 pb-4">
+                    <h2 class="text-2xl font-black gradient-text">Transcripción Completa</h2>
+                    <button id="downloadPdfBtn" class="bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-3 rounded-xl font-bold">PDF</button>
+                </div>
+                <div id="transcriptionText" class="bg-slate-900/50 border border-white/5 rounded-2xl p-6 text-slate-300 leading-relaxed max-h-[500px] overflow-y-auto whitespace-pre-wrap italic shadow-inner"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const apiKey = ""; 
+
+        const audioInput = document.getElementById('audioInput');
+        const dropzone = document.getElementById('dropzone');
+        const transcribeBtn = document.getElementById('transcribeBtn');
+        const transcriptionText = document.getElementById('transcriptionText');
+        const resultArea = document.getElementById('resultArea');
+        const status = document.getElementById('status');
+        const btnLoader = document.getElementById('btnLoader');
+        const btnText = document.getElementById('btnText');
+        const progressBar = document.getElementById('progressBar');
+        const progressPercent = document.getElementById('progressPercent');
+        const progressSection = document.getElementById('progressSection');
+        const progressLabel = document.getElementById('progressLabel');
+
+        let selectedFile = null;
+
+        dropzone.onclick = () => audioInput.click();
+        audioInput.onchange = (e) => handleFileSelection(e.target.files[0]);
+
+        function handleFileSelection(file) {
+            if (!file) return;
+            selectedFile = file;
+            document.getElementById('file-info').innerHTML = `
+                <p class="text-lg font-bold text-white">${file.name}</p>
+                <p class="text-sm text-blue-400 font-bold">${(file.size / 1048576).toFixed(2)} MB - LISTO</p>
+            `;
+            transcribeBtn.disabled = false;
+        }
+
+        function showStatus(msg, type) {
+            status.textContent = msg;
+            status.className = `p-5 rounded-xl text-sm font-bold text-center ${type === 'error' ? 'bg-red-900/30 text-red-400 border border-red-500/50' : 'bg-emerald-900/30 text-emerald-400 border border-emerald-500/50'}`;
+            status.classList.remove('hidden');
+        }
+
+        transcribeBtn.onclick = async () => {
+            if (!selectedFile) return;
+            setLoading(true);
+            resultArea.classList.add('hidden');
+            status.classList.add('hidden');
+            transcriptionText.textContent = "";
+
+            try {
+                updateProgress(5, "Analizando audio...");
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const arrayBuffer = await selectedFile.arrayBuffer();
+                const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+                
+                // Dividir en trozos de 180 segundos (3 minutos)
+                const segmentDuration = 180; 
+                const totalDuration = audioBuffer.duration;
+                const numSegments = Math.ceil(totalDuration / segmentDuration);
+                
+                let fullTranscription = "";
+
+                for (let i = 0; i < numSegments; i++) {
+                    const start = i * segmentDuration;
+                    const end = Math.min((i + 1) * segmentDuration, totalDuration);
+                    const percent = Math.round(((i) / numSegments) * 100);
+                    
+                    updateProgress(percent, `Procesando parte ${i + 1} de ${numSegments}...`);
+                    
+                    const segmentBuffer = extractSegment(audioBuffer, start, end, audioCtx);
+                    const wavBlob = await bufferToWaveBlob(segmentBuffer);
+                    const base64 = await blobToBase64(wavBlob);
+                    
+                    const text = await callGeminiAPI(base64);
+                    fullTranscription += text + "\n\n";
+                    
+                    // Mostrar avance parcial
+                    transcriptionText.textContent = fullTranscription;
+                    resultArea.classList.remove('hidden');
+                }
+                
+                updateProgress(100, "¡Finalizado!");
+                showStatus("Transcripción completa realizada por fragmentos.", "success");
+            } catch (err) {
+                console.error(err);
+                showStatus(`Error: ${err.message}`, "error");
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        function extractSegment(buffer, start, end, ctx) {
+            const startSample = Math.floor(start * buffer.sampleRate);
+            const endSample = Math.floor(end * buffer.sampleRate);
+            const frameCount = endSample - startSample;
+            
+            const newBuffer = ctx.createBuffer(1, frameCount, 16000); // Forzamos 16kHz Mono
+            const channelData = buffer.getChannelData(0);
+            const newChannelData = newBuffer.getChannelData(0);
+            
+            const ratio = buffer.sampleRate / 16000;
+            for (let i = 0; i < frameCount; i++) {
+                newChannelData[i] = channelData[startSample + Math.floor(i * ratio)];
+            }
+            return newBuffer;
+        }
+
+        async function bufferToWaveBlob(abuffer) {
+            const numOfChan = 1, length = abuffer.length * 2 + 44, buffer = new ArrayBuffer(length), view = new DataView(buffer);
+            let pos = 0;
+            const setU32 = (d) => { view.setUint32(pos, d, true); pos += 4; };
+            const setU16 = (d) => { view.setUint16(pos, d, true); pos += 2; };
+            setU32(0x46464952); setU32(length - 8); setU32(0x45564157); setU32(0x20746d66); setU32(16); setU16(1); setU16(1); setU32(16000); setU32(32000); setU16(2); setU16(16); setU32(0x61746164); setU32(length - pos - 4);
+            const data = abuffer.getChannelData(0);
+            for (let i = 0; i < data.length; i++) {
+                const s = Math.max(-1, Math.min(1, data[i]));
+                view.setInt16(pos, s < 0 ? s * 0x8000 : s * 0x7FFF, true); pos += 2;
+            }
+            return new Blob([buffer], { type: "audio/wav" });
+        }
+
+        async function blobToBase64(blob) {
+            return new Promise(r => { const f = new FileReader(); f.onload = () => r(f.result.split(',')[1]); f.readAsDataURL(blob); });
+        }
+
+        async function callGeminiAPI(base64) {
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{ parts: [{ text: "Transcribe literalmente este segmento de audio. Solo el texto." }, { inlineData: { mimeType: "audio/wav", data: base64 } }] }]
+                })
+            });
+            if (!res.ok) throw new Error(`Fallo en segmento: ${res.status}`);
+            const d = await res.json();
+            return d.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        }
+
+        function setLoading(isLoading) {
+            transcribeBtn.disabled = isLoading;
+            btnLoader.classList.toggle('hidden', !isLoading);
+            btnText.textContent = isLoading ? 'Transcribiendo...' : 'Iniciar Transcripción por Bloques';
+            progressSection.classList.toggle('hidden', !isLoading);
+        }
+
+        function updateProgress(val, label) {
+            progressBar.style.width = `${val}%`;
+            progressPercent.textContent = `${val}%`;
+            if (label) progressLabel.textContent = label;
+        }
+
+        document.getElementById('downloadPdfBtn').onclick = () => {
+            if (!selectedFile) return;
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+            
+            // Lógica para el nombre dinámico del archivo
+            const originalName = selectedFile.name;
+            const lastDotIndex = originalName.lastIndexOf('.');
+            const baseName = lastDotIndex !== -1 ? originalName.substring(0, lastDotIndex) : originalName;
+            const finalPdfName = `${baseName}.pdf`;
+
+            const splitText = doc.splitTextToSize(transcriptionText.textContent, 180);
+            let y = 20;
+            splitText.forEach(l => { 
+                if (y > 280) { doc.addPage(); y = 20; } 
+                doc.text(l, 15, y); 
+                y += 6; 
+            });
+            doc.save(finalPdfName);
+        };
+    </script>
+</body>
+</html>
